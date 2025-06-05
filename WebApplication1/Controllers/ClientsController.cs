@@ -22,17 +22,17 @@ public class ClientsController : ControllerBase
 
         if (client == null)
         {
-            return NotFound("client not found.");
+            return NotFound("Client not found.");
         }
 
         if (client.ClientTrips.Any())
         {
-            return BadRequest("cannot delete client with assigned trips.");
+            return BadRequest("Cannot delete client with assigned trips.");
         }
 
         _context.Clients.Remove(client);
         await _context.SaveChangesAsync();
 
-        return Ok("client deleted successfully.");
+        return Ok("Client deleted successfully.");
     }
 }

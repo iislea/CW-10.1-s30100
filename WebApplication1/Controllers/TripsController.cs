@@ -2,15 +2,11 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using WebApplication1.Data;
+using WebApplication1.DTO;
 using WebApplication1.Models;
 
 namespace WebApplication1.Controllers
 {
-    using Microsoft.AspNetCore.Mvc;
-    using Microsoft.EntityFrameworkCore;
-    using WebApplication1.Models;
-    using WebApplication1.DTO;
-
     [Route("api/[controller]")]
     [ApiController]
     public class TripsController : ControllerBase
@@ -21,14 +17,20 @@ namespace WebApplication1.Controllers
         {
             _context = context;
         }
-        
+
         [HttpGet]
-        public async Task<IActionResult> GetTrips()
+        public async Task<IActionResult> GetTrips([FromQuery] int page = 1, [FromQuery] int pageSize = 10)
         {
+            var totalTrips = await _context.Trips.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalTrips / (double)pageSize);
+
             var trips = await _context.Trips
                 .Include(t => t.IdCountries)
                 .Include(t => t.ClientTrips)
-                .ThenInclude(ct => ct.IdClientNavigation)
+                    .ThenInclude(ct => ct.IdClientNavigation)
+                .OrderByDescending(t => t.DateFrom)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
                 .Select(t => new
                 {
                     t.Name,
@@ -36,10 +38,7 @@ namespace WebApplication1.Controllers
                     t.DateFrom,
                     t.DateTo,
                     t.MaxPeople,
-                    Countries = t.IdCountries.Select(c => new
-                    {
-                        c.Name
-                    }),
+                    Countries = t.IdCountries.Select(c => new { c.Name }),
                     Clients = t.ClientTrips.Select(ct => new
                     {
                         ct.IdClientNavigation.FirstName,
@@ -48,32 +47,15 @@ namespace WebApplication1.Controllers
                 })
                 .ToListAsync();
 
-            return Ok(trips);
-        }
-        
-        [HttpDelete("/api/clients/{idClient}")]
-        public async Task<IActionResult> DeleteClient(int idClient)
-        {
-            var client = await _context.Clients
-                .Include(c => c.ClientTrips)
-                .FirstOrDefaultAsync(c => c.IdClient == idClient);
-
-            if (client == null)
+            return Ok(new
             {
-                return NotFound("client not found.");
-            }
-
-            if (client.ClientTrips.Any())
-            {
-                return BadRequest("ccannot delete client assigned to a trip.");
-            }
-
-            _context.Clients.Remove(client);
-            await _context.SaveChangesAsync();
-
-            return Ok("client deleted.");
+                pageNum = page,
+                pageSize = pageSize,
+                allPages = totalPages,
+                trips = trips
+            });
         }
-        
+
         [HttpPost("{idTrip}/clients")]
         public async Task<IActionResult> AssignClientToTrip(int idTrip, [FromBody] ClientAssignRequest request)
         {
@@ -83,7 +65,17 @@ namespace WebApplication1.Controllers
 
             if (trip == null)
             {
-                return NotFound("trip not found.");
+                return NotFound("Trip not found.");
+            }
+
+            if (trip.DateFrom <= DateTime.Now)
+            {
+                return BadRequest("Cannot assign to a trip that already started.");
+            }
+
+            if (trip.ClientTrips.Count >= trip.MaxPeople)
+            {
+                return BadRequest("Trip has reached the maximum number of people.");
             }
 
             var existingClient = await _context.Clients
@@ -93,7 +85,7 @@ namespace WebApplication1.Controllers
             if (existingClient != null &&
                 existingClient.ClientTrips.Any(ct => ct.IdTrip == idTrip))
             {
-                return BadRequest("client already assigned to this trip.");
+                return BadRequest("Client already assigned to this trip.");
             }
 
             if (existingClient == null)
@@ -115,13 +107,14 @@ namespace WebApplication1.Controllers
             {
                 IdClient = existingClient.IdClient,
                 IdTrip = trip.IdTrip,
-                RegisteredAt = DateTime.Now
+                RegisteredAt = DateTime.Now,
+                PaymentDate = request.PaymentDate
             };
 
             _context.ClientTrips.Add(clientTrip);
             await _context.SaveChangesAsync();
 
-            return Ok("client assigned to trip.");
+            return Ok("Client assigned to trip.");
         }
     }
 }
