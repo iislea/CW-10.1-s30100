@@ -6,7 +6,7 @@ namespace WebApplication1.Services;
 using Microsoft.EntityFrameworkCore;
 using WebApplication1.Models;
 
-public class TripService : ITripService
+public class TripService
 {
     private readonly YourDbContext _context;
 
@@ -15,77 +15,52 @@ public class TripService : ITripService
         _context = context;
     }
 
-    public async Task<IEnumerable<TripDto>> GetTripsAsync()
+    public async Task<object> GetTripsAsync(int page, int pageSize)
     {
-        return await _context.Trips
+        var query = _context.Trips
             .Include(t => t.ClientTrips)
-                .ThenInclude(ct => ct.IdClientNavigation)
+            .ThenInclude(ct => ct.IdClientNavigation)
             .Include(t => t.IdCountries)
-            .Select(t => new TripDto
+            .OrderByDescending(t => t.DateFrom);
+
+        var totalTrips = await query.CountAsync();
+        var allPages = (int)Math.Ceiling((double)totalTrips / pageSize);
+
+        var trips = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(t => new
             {
-                Name = t.Name,
-                Description = t.Description,
-                DateFrom = t.DateFrom,
-                DateTo = t.DateTo,
-                MaxPeople = t.MaxPeople,
-                Countries = t.IdCountries.Select(c => c.Name).ToList(),
-                Clients = t.ClientTrips.Select(ct => new ClientDto
+                t.Name,
+                t.Description,
+                t.DateFrom,
+                t.DateTo,
+                t.MaxPeople,
+                Countries = t.IdCountries.Select(c => new { c.Name }),
+                Clients = t.ClientTrips.Select(ct => new
                 {
-                    FirstName = ct.IdClientNavigation.FirstName,
-                    LastName = ct.IdClientNavigation.LastName
-                }).ToList()
+                    ct.IdClientNavigation.FirstName,
+                    ct.IdClientNavigation.LastName
+                })
             }).ToListAsync();
+
+        return new
+        {
+            pageNum = page,
+            pageSize,
+            allPages,
+            trips
+        };
     }
 
-    public async Task<bool> AssignClientToTripAsync(int idTrip, ClientTripRequestDto request)
+    public async Task<bool> TripExistsAsync(int idTrip)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
+        return await _context.Trips.AnyAsync(t => t.IdTrip == idTrip);
+    }
 
-        try
-        {
-            var client = await _context.Clients
-                .FirstOrDefaultAsync(c => c.Pesel == request.Pesel);
-
-            if (client == null)
-            {
-                client = new Client
-                {
-                    FirstName = request.FirstName,
-                    LastName = request.LastName,
-                    Email = request.Email,
-                    Telephone = request.Telephone,
-                    Pesel = request.Pesel
-                };
-
-                _context.Clients.Add(client);
-                await _context.SaveChangesAsync();
-            }
-
-            var trip = await _context.Trips
-                .Include(t => t.ClientTrips)
-                .FirstOrDefaultAsync(t => t.IdTrip == idTrip);
-
-            if (trip == null || trip.ClientTrips.Any(ct => ct.IdClient == client.IdClient))
-                return false;
-
-            var newClientTrip = new ClientTrip
-            {
-                IdClient = client.IdClient,
-                IdTrip = idTrip,
-                RegisteredAt = DateTime.Now,
-                PaymentDate = request.PaymentDate
-            };
-
-            _context.ClientTrips.Add(newClientTrip);
-            await _context.SaveChangesAsync();
-
-            await transaction.CommitAsync();
-            return true;
-        }
-        catch
-        {
-            await transaction.RollbackAsync();
-            throw;
-        }
+    public async Task<bool> IsTripInFuture(int idTrip)
+    {
+        var trip = await _context.Trips.FirstOrDefaultAsync(t => t.IdTrip == idTrip);
+        return trip != null && trip.DateFrom > DateTime.Now;
     }
 }
